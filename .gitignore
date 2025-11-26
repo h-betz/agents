@@ -1,3 +1,7 @@
 node_modules
 .env
 .idea
+
+# Google API credentials and tokens
+**/credentials.json
+**/token.json
