@@ -1,0 +1,15 @@
+# Use AWS Lambda Python base image
+FROM public.ecr.aws/lambda/python:3.11
+
+# Copy requirements and install dependencies
+COPY aws/zillow/requirements.txt ${LAMBDA_TASK_ROOT}/
+RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt
+
+# Copy shared crawler module (includes utils subdirectory)
+COPY crawler/ ${LAMBDA_TASK_ROOT}/crawler/
+
+# Copy Lambda handler
+COPY aws/zillow/handler.py ${LAMBDA_TASK_ROOT}/
+
+# Set the Lambda handler
+CMD ["handler.lambda_handler"]

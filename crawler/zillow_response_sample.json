@@ -1,0 +1,239 @@
+{
+    "zpid": "38239866",
+    "palsId": "5632006_NJCD2096184",
+    "id": "38239866",
+    "rawHomeStatusCd": "RecentlySold",
+    "marketingStatusSimplifiedCd": "RecentChange",
+    "imgSrc": "https://photos.zillowstatic.com/fp/497fc283f8a5b3670ded0261df0c162c-p_e.jpg",
+    "hasImage": true,
+    "detailUrl": "https://www.zillow.com/homedetails/112-E-Franklin-Ave-Collingswood-NJ-08108/38239866_zpid/",
+    "statusType": "SOLD",
+    "statusText": "Sold",
+    "countryCurrency": "$",
+    "soldPrice": "$480,000",
+    "unformattedPrice": 480000,
+    "address": "112 E Franklin Ave, Collingswood, NJ 08108",
+    "addressStreet": "112 E Franklin Ave",
+    "addressCity": "Collingswood",
+    "addressState": "NJ",
+    "addressZipcode": "08108",
+    "isUndisclosedAddress": false,
+    "shouldShowRequestOnPrice": false,
+    "beds": 3,
+    "baths": 2.0,
+    "area": 1719,
+    "latLong": {
+        "latitude": 39.9224,
+        "longitude": -75.08091
+    },
+    "isZillowOwned": false,
+    "flexFieldText": "Sold ",
+    "contentType": "soldDate",
+    "hdpData": {
+        "homeInfo": {
+            "zpid": 38239866,
+            "streetAddress": "112 E Franklin Ave",
+            "zipcode": "08108",
+            "city": "Collingswood",
+            "state": "NJ",
+            "latitude": 39.9224,
+            "longitude": -75.08091,
+            "price": 480000.0,
+            "dateSold": 1765872000000,
+            "bathrooms": 2.0,
+            "bedrooms": 3.0,
+            "livingArea": 1719.0,
+            "homeType": "SINGLE_FAMILY",
+            "homeStatus": "RECENTLY_SOLD",
+            "daysOnZillow": 6,
+            "isFeatured": false,
+            "shouldHighlight": false,
+            "zestimate": 480700,
+            "rentZestimate": 3070,
+            "listing_sub_type": {
+
+            },
+            "isUnmappable": false,
+            "isPreforeclosureAuction": false,
+            "homeStatusForHDP": "RECENTLY_SOLD",
+            "priceForHDP": 480000.0,
+            "timeOnZillow": 519091000,
+            "isNonOwnerOccupied": true,
+            "isPremierBuilder": false,
+            "isZillowOwned": false,
+            "currency": "USD",
+            "country": "USA",
+            "taxAssessedValue": 593500.0,
+            "lotAreaValue": 4121.0,
+            "lotAreaUnit": "sqft",
+            "isShowcaseListing": false
+        }
+    },
+    "isSaved": true,
+    "isUserClaimingOwner": false,
+    "isUserConfirmedClaim": false,
+    "pgapt": "RecentlySold",
+    "sgapt": "RecentChange",
+    "zestimate": 480700,
+    "shouldShowZestimateAsPrice": false,
+    "has3DModel": false,
+    "hasVideo": false,
+    "isHomeRec": false,
+    "hasAdditionalAttributions": true,
+    "isFeaturedListing": false,
+    "isShowcaseListing": false,
+    "list": true,
+    "relaxed": false,
+    "info3String": "https://photos.zillowstatic.com/fp/3c0b241c63af930483095615f244c283-zillow_web_48_23.jpg",
+    "brokerName": "Century 21 Advantage Gold-Cherry Hill",
+    "carouselPhotosComposable": {
+        "baseUrl": "https://photos.zillowstatic.com/fp/{photoKey}-p_e.jpg",
+        "communityBaseUrl": "None",
+        "photoData": [
+            {
+                "photoKey": "497fc283f8a5b3670ded0261df0c162c"
+            },
+            {
+                "photoKey": "d8f876de4a5385ef4fe09044c28b21ec"
+            },
+            {
+                "photoKey": "8467a44b31f21c099b9633ef9fe647a0"
+            },
+            {
+                "photoKey": "2ebc91ee17650b6c903f9174525f338d"
+            },
+            {
+                "photoKey": "fd2c90e02242f8311f8be911ffea4bd5"
+            },
+            {
+                "photoKey": "ae50e9da6dc2b8e1874a86ba34b48e9e"
+            },
+            {
+                "photoKey": "c64c07a0c11975770f030916cda2aaf1"
+            },
+            {
+                "photoKey": "2662624c92a2c3925e0492631eea99c8"
+            },
+            {
+                "photoKey": "63978db953c6f78aa203b0f23f3d4fbf"
+            },
+            {
+                "photoKey": "950addb41e0c7c09159ae4e90b0f9555"
+            },
+            {
+                "photoKey": "e8bb1188504b8c56753b31bdd22cd5b9"
+            },
+            {
+                "photoKey": "9e0ece043b4931283e6b348aeeb0473b"
+            },
+            {
+                "photoKey": "3d0864e7263fcb7135b55c748ff536d0"
+            },
+            {
+                "photoKey": "311b66d419a2076398114386cf304cb8"
+            },
+            {
+                "photoKey": "104240c9f0d2fb321052fbe03e646fc6"
+            },
+            {
+                "photoKey": "20cc427e1f91c55c3eff7e4e212f12f5"
+            },
+            {
+                "photoKey": "81eb846b2536b8ac71472f7afaf6215d"
+            },
+            {
+                "photoKey": "bd573f5985e2825e1a393696fee7aeb0"
+            },
+            {
+                "photoKey": "7f0797d781fff679ddac24738244bc1e"
+            },
+            {
+                "photoKey": "f2428188da9b297e57eefe8e52e14149"
+            },
+            {
+                "photoKey": "d2e26d0e8928606912bc8e081c3b666c"
+            },
+            {
+                "photoKey": "e6ca6eb0372e70354766b4ebc85c21b1"
+            },
+            {
+                "photoKey": "f1bce143e1fa189ffc2e682bb24aa80e"
+            },
+            {
+                "photoKey": "f7fb35b623c8e1108c37a8ea7582dd82"
+            },
+            {
+                "photoKey": "71c67dbd5c2e39fc109f7408b23ba986"
+            },
+            {
+                "photoKey": "08078acebcb84fa5e456d5e73ca247ca"
+            },
+            {
+                "photoKey": "8cb62d8b659a4166535579b141cf7786"
+            },
+            {
+                "photoKey": "c579431842653a022211b92057299fc9"
+            },
+            {
+                "photoKey": "3b888c61ccd4ca6af3cfdb8b0cba1c14"
+            },
+            {
+                "photoKey": "a1f6b78799b7c26b4c475b383b0fbccc"
+            },
+            {
+                "photoKey": "8738731b12a2db5f712351e51c81ba2d"
+            },
+            {
+                "photoKey": "ebe102071dde78860f304cd5e244d399"
+            },
+            {
+                "photoKey": "cf8b8616e8c3fa44a290fd29228d1bdd"
+            },
+            {
+                "photoKey": "0ca570e65f6e3efc483ea43d9df412db"
+            },
+            {
+                "photoKey": "2090b36e601c0c0fc174d60142fb0a40"
+            },
+            {
+                "photoKey": "21f46b795a3b1c7d977044f881c747b2"
+            },
+            {
+                "photoKey": "27d9c4fe9055a34421151120e044bde0"
+            },
+            {
+                "photoKey": "517e9ee09248402852076b98022257fb"
+            },
+            {
+                "photoKey": "344f4b993784e6de17fc73e0dae26edd"
+            },
+            {
+                "photoKey": "2c927279a28fed697acd33009825b91d"
+            },
+            {
+                "photoKey": "c6e1e61843bd22e35db3a604fd82823f"
+            },
+            {
+                "photoKey": "1e2a8705f75218ffdec87880d0a91546"
+            },
+            {
+                "photoKey": "f857a20ea422bb93ac59727cea045ff3"
+            },
+            {
+                "photoKey": "aa7da7b3d2046530e535fce7d0f4ca49"
+            },
+            {
+                "photoKey": "bbb3fd30fae9ae02a93d368def3d5257"
+            },
+            {
+                "photoKey": "137cc913f832f7a5198d79d73f70c59b"
+            },
+            {
+                "photoKey": "e6904faebc2396a013e69816a740b15d"
+            }
+        ],
+        "communityPhotoData": "None",
+        "isStaticUrls": false
+    },
+    "isPaidBuilderNewConstruction": false
+}

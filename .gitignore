@@ -2,6 +2,15 @@ node_modules
 .env
 .idea
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
 # Google API credentials and tokens
 **/credentials.json
 **/token.json
+
+# Do not include browser cookie/session data
+crawler/session_data

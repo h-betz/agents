@@ -1,12 +1,18 @@
 import asyncio
-import json
 import httpx
+import json
+import os
+import re
 import sys
+from bs4 import BeautifulSoup
 from claude_agent_sdk import query, ClaudeAgentOptions
+from google_integrations.google_docs import GoogleDocsManager
 
 
 options = ClaudeAgentOptions(
-    system_prompt="You are a helpful assistant tasked with helping me manage my recipes.",
+    system_prompt="""
+    You are a helpful assistant tasked with helping me manage my recipes.
+    """,
     permission_mode="bypassPermissions",
 )
 # We'll use httpx async client instead
@@ -22,14 +28,6 @@ RECIPE_SCHEMA = {
 }
 
 
-def add_recipe(recipe):
-    """
-    Calls the Google Docs API and uploads a document with the
-    recipe details in there
-    """
-    pass
-
-
 async def fetch_html_content(recipe_url):
     """Fetch HTML content from the recipe URL."""
     headers = {
@@ -37,30 +35,74 @@ async def fetch_html_content(recipe_url):
     }
     async with httpx.AsyncClient() as client:
         response = await client.get(recipe_url, headers=headers)
+        print(f"Reponse [{response.status_code}]")
         return response.text
 
 
-def create_temp_file(html_content):
-    """Save HTML content to a temporary file and return the file path."""
-    import tempfile
+def extract_recipe_content(html_content):
+    """Extract recipe-relevant content from HTML using BeautifulSoup."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    extracted_parts = []
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".html", delete=False
-    ) as temp_file:
-        temp_file.write(html_content)
-        return temp_file.name
+    # Strategy 1: Try to find JSON-LD structured data (most reliable)
+    json_ld_scripts = soup.find_all("script", type="application/ld+json")
+    for script in json_ld_scripts:
+        if script.string and "recipe" in script.string.lower():
+            extracted_parts.append(f"JSON-LD Recipe Data:\n{script.string}\n")
+
+    # Strategy 2: Search for common recipe-related elements
+    # Look for ingredients
+    ingredient_patterns = re.compile(r"ingredient|recipe-ingredient", re.I)
+    ingredient_sections = soup.find_all(
+        ["ul", "ol", "div", "section"], class_=ingredient_patterns
+    )
+    for section in ingredient_sections[:3]:  # Limit to first 3 matches
+        extracted_parts.append(f"Ingredients Section:\n{section.get_text()}\n")
+
+    # Look for instructions/steps
+    instruction_patterns = re.compile(
+        r"instruction|step|direction|method|preparation", re.I
+    )
+    instruction_sections = soup.find_all(
+        ["ol", "ul", "div", "section"], class_=instruction_patterns
+    )
+    for section in instruction_sections[:3]:  # Limit to first 3 matches
+        extracted_parts.append(f"Instructions Section:\n{section.get_text()}\n")
+
+    # Look for recipe metadata (times, servings, etc.)
+    meta_patterns = re.compile(r"time|serving|yield|difficulty", re.I)
+    meta_sections = soup.find_all(["div", "span", "p"], class_=meta_patterns)
+    for section in meta_sections[:5]:  # Limit to first 5 matches
+        extracted_parts.append(f"Metadata:\n{section.get_text()}\n")
+
+    # Look for recipe title/name
+    title = soup.find("h1")
+    if title:
+        extracted_parts.insert(0, f"Recipe Title:\n{title.get_text()}\n")
+
+    # If we found content, return it; otherwise return truncated HTML
+    if extracted_parts:
+        content = "\n".join(extracted_parts)
+        print(f"Extracted {len(content)} characters of recipe content")
+        return content
+    else:
+        # Fallback: return first 150KB of HTML
+        print("No specific recipe sections found, using truncated HTML")
+        return html_content[:150000]
 
 
-def create_extraction_prompt(temp_file_path):
+def create_extraction_prompt(recipe_content):
     """Create the prompt for Claude to extract recipe information."""
     return f"""
-    Please read the HTML file at {temp_file_path} and extract recipe information from it.
-    
-    If the file is too large, read it in chunks using offset and limit parameters to find the recipe content.
-    Look for sections containing ingredients, instructions, prep time, cook time, etc.
-    
+    Please extract recipe information from the following content.
+    This content has been extracted from a recipe webpage and may contain
+    ingredients, instructions, prep time, cook time, and other recipe details.
+
+    Content:
+    {recipe_content}
+
     Return the information in JSON format matching this exact schema:
-    
+
     {{
         "recipe_name": "string",
         "ingredients": ["list", "of", "ingredients"],
@@ -70,14 +112,30 @@ def create_extraction_prompt(temp_file_path):
         "prep_time": "string (e.g., '15 minutes')",
         "total_time": "string (e.g., '45 minutes')"
     }}
-    
+
     Please return ONLY the JSON object, no other text.
     """
+
+
+def extract_json_from_markdown(text):
+    """Extract JSON from markdown code blocks."""
+    # Remove ```json and ``` markers
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]  # Remove ```json
+    elif text.startswith("```"):
+        text = text[3:]  # Remove ```
+
+    if text.endswith("```"):
+        text = text[:-3]  # Remove trailing ```
+
+    return text.strip()
 
 
 async def process_claude_response(prompt):
     """Process Claude's response and extract text content."""
     result_text = ""
+    print("Claude processing response...")
     async for message in query(prompt=prompt, options=options):
         # Handle different content types
         if hasattr(message, "content") and message.content:
@@ -100,12 +158,30 @@ async def process_claude_response(prompt):
 
 def cleanup_temp_file(temp_file_path):
     """Clean up the temporary file."""
-    import os
-
     try:
         os.unlink(temp_file_path)
     except OSError:
         print(f"Warning: Could not delete temporary file: {temp_file_path}")
+
+
+def format_to_google_doc(recipe_data):
+    """
+    Takes recipe data and formats it so it can be
+    used to create a google doc
+    """
+    sections = []
+    for ingredient in recipe_data.get("ingredients"):
+        sections.append({"text": ingredient, "style": "bullet"})
+
+    for step in recipe_data.get("steps"):
+        sections.append(
+            {
+                "text": step,
+                "style": "numbered",
+            }
+        )
+
+    return {"sections": sections}
 
 
 async def extract_recipe_from_url(recipe_url):
@@ -118,36 +194,39 @@ async def extract_recipe_from_url(recipe_url):
     - prep time
     - total time
     """
-    temp_file_path = None
-
     try:
         # Fetch HTML content
         html_content = await fetch_html_content(recipe_url)
 
-        # Create temporary file
-        temp_file_path = create_temp_file(html_content)
+        # Extract recipe-specific content
+        recipe_content = extract_recipe_content(html_content)
 
         # Create prompt and query Claude
-        prompt = create_extraction_prompt(temp_file_path)
+        prompt = create_extraction_prompt(recipe_content)
         result_text = await process_claude_response(prompt)
 
         # Parse the JSON response
-        recipe_data = json.loads(result_text)
-        print(
-            f"Successfully extracted recipe: {recipe_data.get('recipe_name', 'Unknown')}"
-        )
-        return recipe_data
+        if not result_text:
+            print("Error: Claude returned an empty response")
+            return None
 
+        # Debug: print the raw response
+        print(f"Raw Claude response (first 200 chars): {result_text[:200]}")
+
+        # Extract JSON from markdown code blocks if present
+        cleaned_text = extract_json_from_markdown(result_text)
+
+        recipe_data = json.loads(cleaned_text)
+        recipe_name = recipe_data.get("recipe_name", "Unknown")
+        print(f"Successfully extracted recipe: {recipe_name}")
+        return recipe_data
     except json.JSONDecodeError as e:
         print(f"Error parsing Claude's response as JSON: {e}")
+        print(f"Response content: {result_text[:500] if result_text else 'None'}")
         return None
     except Exception as e:
         print(f"Error extracting recipe: {e}")
         return None
-    finally:
-        # Clean up the temporary file
-        if temp_file_path:
-            cleanup_temp_file(temp_file_path)
 
 
 async def run(recipe_url):
@@ -163,6 +242,8 @@ async def main():
         recipe_url = "https://www.thegunnysack.com/easy-pecan-pie-without-corn-syrup/"
 
     recipe_data = await run(recipe_url)
+    if not recipe_data:
+        return
 
     if recipe_data:
         print("\n=== EXTRACTED RECIPE ===")
@@ -185,6 +266,15 @@ async def main():
                 print(f"  - {note}")
     else:
         print("Failed to extract recipe data")
+
+    file_metadata = {
+        "name": recipe_data.get("recipe_name"),
+        "parents": ["0B022n6oV2lhRc2pFY18yVnFLaDA"],
+    }
+    file_content = format_to_google_doc(recipe_data)
+    with GoogleDocsManager() as google_docs:
+        print("Exporting to Google Docs")
+        google_docs.create(file_metadata, file_content)
 
 
 if __name__ == "__main__":
