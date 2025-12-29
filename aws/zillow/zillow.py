@@ -63,6 +63,7 @@ class Zillow(SimpleCrawler):
                 "lot_size": home_info.get("lotAreaValue"),
                 "lot_size_unit": home_info.get("lotAreaUnit"),
                 "tax_assessment": home_info.get("taxAssessedValue"),
+                "zpid": home_info.get("zpid"),
             })
 
         return homes
@@ -70,7 +71,11 @@ class Zillow(SimpleCrawler):
     def sync_sold(self, data: Dict):
         results = self.fetch_recently_sold(data)
         parsed_results = self.parse_recently_sold(results)
-        self._save_to_database(parsed_results)
+        new_zpids = self._save_to_database(parsed_results)
+
+        # Send new zpids to SQS for price history fetching
+        if new_zpids:
+            self._send_to_sqs(new_zpids)
 
     def _get_db_connection(self):
         """Create database connection from environment variables"""
@@ -82,64 +87,98 @@ class Zillow(SimpleCrawler):
             port=os.environ.get("DB_PORT", "5432")
         )
 
-    def _save_to_database(self, homes: List[Dict]):
+    def _send_to_sqs(self, zpids: List[int]):
+        """Send zpids to SQS queue for price history fetching"""
+        queue_url = os.environ.get('PRICE_HISTORY_QUEUE_URL')
+
+        if not queue_url:
+            print("Warning: PRICE_HISTORY_QUEUE_URL not set, skipping SQS messages")
+            return
+
+        try:
+            sqs = boto3.client('sqs')
+
+            for zpid in zpids:
+                message_body = json.dumps({'zpid': zpid})
+                sqs.send_message(
+                    QueueUrl=queue_url,
+                    MessageBody=message_body
+                )
+                print(f"Sent zpid {zpid} to SQS queue")
+
+            print(f"Successfully sent {len(zpids)} messages to SQS")
+
+        except Exception as e:
+            print(f"Error sending messages to SQS: {e}")
+            # Don't raise - SQS failure shouldn't break the scraper
+
+    def _save_to_database(self, homes: List[Dict]) -> List[int]:
         """
         Insert homes into database, skip duplicates.
-        Uses ON CONFLICT to handle duplicates efficiently.
+        Returns list of zpids for newly inserted homes.
         """
         if not homes:
             print(f"No homes to save for {self.city}")
-            return
+            return []
 
         conn = None
+        new_zpids = []
+
         try:
             conn = self._get_db_connection()
             cur = conn.cursor()
 
-            # Insert query with ON CONFLICT to skip duplicates
-            # Using address + date_sold as the duplicate check
+            # Insert query with RETURNING to get zpids of new records
             insert_query = """
                 INSERT INTO homes (
                     url, sold_price, raw_sold_price,
                     address_city, address_street, address_state, address_zipcode,
                     date_sold, bedrooms, bathrooms, sqft,
                     days_on_market, type, zestimate,
-                    lot_size, lot_size_unit, tax_assessment
+                    lot_size, lot_size_unit, tax_assessment, zpid
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (address_city, address_street, address_state, date_sold) DO NOTHING
+                RETURNING zpid
             """
 
-            # Flatten the data for batch insert
-            values = []
+            # Insert one by one to get zpids of new records
             for home in homes:
-                values.append((
-                    home.get('url'),
-                    home.get('sold_price'),
-                    home.get('raw_sold_price'),
-                    home.get('address', {}).get('city'),
-                    home.get('address', {}).get('street'),
-                    home.get('address', {}).get('state'),
-                    home.get('address', {}).get('zipcode'),
-                    home.get('date_sold'),
-                    home.get('bedrooms'),
-                    home.get('bathrooms'),
-                    home.get('sqft'),
-                    home.get('days_on_market'),
-                    home.get('type'),
-                    home.get('zestimate'),
-                    home.get('lot_size'),
-                    home.get('lot_size_unit'),
-                    home.get('tax_assessment')
-                ))
+                try:
+                    cur.execute(insert_query, (
+                        home.get('url'),
+                        home.get('sold_price'),
+                        home.get('raw_sold_price'),
+                        home.get('address', {}).get('city'),
+                        home.get('address', {}).get('street'),
+                        home.get('address', {}).get('state'),
+                        home.get('address', {}).get('zipcode'),
+                        home.get('date_sold'),
+                        home.get('bedrooms'),
+                        home.get('bathrooms'),
+                        home.get('sqft'),
+                        home.get('days_on_market'),
+                        home.get('type'),
+                        home.get('zestimate'),
+                        home.get('lot_size'),
+                        home.get('lot_size_unit'),
+                        home.get('tax_assessment'),
+                        home.get('zpid')
+                    ))
 
-            # Batch insert for efficiency
-            execute_batch(cur, insert_query, values)
+                    # If insert succeeded (not a duplicate), get the zpid
+                    result = cur.fetchone()
+                    if result:
+                        new_zpids.append(result[0])
+
+                except Exception as e:
+                    print(f"Error inserting home: {e}")
+                    # Continue with other homes
+
             conn.commit()
-
-            inserted_count = cur.rowcount
-            print(f"Processed {len(homes)} homes for {self.city}, inserted {inserted_count} new records")
+            print(f"Processed {len(homes)} homes for {self.city}, inserted {len(new_zpids)} new records")
+            return new_zpids
 
         except Exception as e:
             if conn:

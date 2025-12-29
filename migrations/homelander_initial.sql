@@ -1,6 +1,7 @@
 CREATE TABLE homes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at timestamp default now(),
+    zpid BIGINT NOT NULL,
     url TEXT NOT NULL,
     sold_price TEXT,
     raw_sold_price INTEGER NOT NULL,
