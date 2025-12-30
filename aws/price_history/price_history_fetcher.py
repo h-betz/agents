@@ -1,7 +1,8 @@
+import boto3
 import os
 import json
-import boto3
 import psycopg2
+import time
 from psycopg2.extras import execute_batch
 from typing import List, Dict, Optional
 from simple_crawler import SimpleCrawler
@@ -27,9 +28,9 @@ class PriceHistoryFetcher(SimpleCrawler):
         self.session_city = session_city
         self._s3_client = None
 
-        # Load session data (cookies) on initialization
+        # Load session data (cookies.json) on initialization
         session_data = self._load_session_data(session_city)
-        self.load_cookies(session_data.get("cookies", {}))
+        self.load_cookies(session_data.get("cookies.json", {}))
 
     def get_property_pricing_history(self, zpid: int):
         """Fetch price history from Zillow GraphQL API"""
@@ -57,6 +58,7 @@ class PriceHistoryFetcher(SimpleCrawler):
         }
 
         print(f"Making request for ZPID [{zpid}]")
+        time.sleep(2)
         response = self.post('https://www.zillow.com/graphql/', params=params, json=data)
         print(f"Response [{response.status_code}]")
         js_result = response.json()

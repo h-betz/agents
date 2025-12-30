@@ -2,6 +2,7 @@ import boto3
 import json
 import os
 import psycopg2
+import time
 from psycopg2.extras import execute_batch
 from typing import Dict, Optional, List
 
@@ -9,7 +10,7 @@ from simple_crawler import SimpleCrawler
 
 
 class Zillow(SimpleCrawler):
-    CITIES = ["Collingswood", "Haddonfield", "Haddon_Township"]
+    CITIES = ["Collingswood", "Haddonfield", "Haddon_Township", "Moorestown"]
 
     def __init__(self, s3_bucket: Optional[str] = None, s3_prefix: Optional[str] = None):
         super(Zillow, self).__init__()
@@ -28,6 +29,7 @@ class Zillow(SimpleCrawler):
 
     def fetch_recently_sold(self, data: Dict):
         url = "https://www.zillow.com/async-create-search-page-state"
+        time.sleep(1)
         response = self.put(url, json=data)
         if response.status_code != 200:
             raise Exception(f"Request to {url} failed with status code {response.status_code}")
