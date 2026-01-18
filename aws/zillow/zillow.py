@@ -3,7 +3,6 @@ import json
 import os
 import psycopg2
 import time
-from psycopg2.extras import execute_batch
 from typing import Dict, Optional, List
 
 from simple_crawler import SimpleCrawler

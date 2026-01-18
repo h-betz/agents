@@ -1,4 +1,4 @@
-requests
 lxml
 boto3
 psycopg2-binary
+curl_cffi==0.13.0
