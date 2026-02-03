@@ -14,4 +14,4 @@ __pycache__/
 **/token.json
 
 # Do not include browser cookie/session data
-crawler/session_data
+local/zillow/session_data

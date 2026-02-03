@@ -1,36 +1,79 @@
-import boto3
-import os
 import json
-import psycopg2
+import signal
+import sys
 import time
-from psycopg2.extras import execute_batch
-from typing import List, Dict, Optional
-from simple_crawler import SimpleCrawler
+from typing import Dict, List
+
+from crawler.simple_crawler import SimpleCrawler
+from db_api import DBAPI
+
+# Track current crawler for signal handler
+_current_crawler = None
 
 
-class PriceHistoryFetcher(SimpleCrawler):
-    """Fetches and stores price history for properties"""
+def _save_on_interrupt(signum, frame):
+    if _current_crawler:
+        _current_crawler.save_cookies()
+    sys.exit(1)
 
-    def __init__(self, s3_bucket: Optional[str] = None, s3_prefix: Optional[str] = None, session_city: str = "Collingswood"):
-        super().__init__()
+
+class Zillow(SimpleCrawler):
+    CITIES = ["Collingswood", "Haddonfield", "Haddon_Township", "Moorestown"]
+
+    def __init__(self):
+        super(Zillow, self).__init__()
         self.headers.update({
             'accept': '*/*',
             'accept-language': 'en-US,en;q=0.9',
             'content-type': 'application/json',
             'origin': 'https://www.zillow.com',
             'priority': 'u=1, i',
-            'client-id': 'not-for-sale-sub-app-browser-client',
-            'x-enabled-listings-flag': 'restricted',
-            'x-z-enable-oauth-conversion': 'true',
+            'referer': 'https://www.zillow.com',
         })
-        self.s3_bucket = s3_bucket or os.getenv('ZILLOW_S3_BUCKET')
-        self.s3_prefix = s3_prefix or os.getenv('ZILLOW_S3_PREFIX', '../../crawler/session_data')
-        self.session_city = session_city
-        self._s3_client = None
+        self.city = ""
 
-        # Load session data (cookies.json) on initialization
-        session_data = self._load_session_data(session_city)
-        self.load_cookies(session_data.get("cookies.json", {}))
+    def fetch_recently_sold(self, data: Dict):
+        url = "https://www.zillow.com/async-create-search-page-state"
+        time.sleep(1)
+        response = self.put(url, json=data)
+        if response.status_code != 200:
+            raise Exception(f"Request to {url} failed with status code {response.status_code}")
+        results = response.json()
+        if results.get("cat1").get("searchList").get("totalPages") > 1:
+            raise Exception(f"Too many results for {self.city}")
+        return response.json()
+
+    def parse_recently_sold(self, data: Dict):
+        search_result = data.get("cat1")
+        results = search_result.get("searchResults")
+        list_results = results.get("listResults")
+        homes = []
+        for result in list_results:
+            home_info = result.get("hdpData").get("homeInfo")
+            homes.append({
+                "url": result.get("detailUrl"),
+                "sold_price": result.get("soldPrice"),
+                "raw_sold_price": result.get("price") or result.get("unformattedPrice"),
+                "address": {
+                    "city": result.get("addressCity"),
+                    "street": result.get("addressStreet"),
+                    "state": result.get("addressState"),
+                    "zipcode": result.get("addressZipcode"),
+                },
+                "date_sold": home_info.get("dateSold"),
+                "bathrooms": home_info.get("bathrooms"),
+                "bedrooms": home_info.get("bedrooms"),
+                "sqft": home_info.get("livingArea"),
+                "days_on_market": home_info.get("daysOnZillow"),
+                "type": home_info.get("homeType"),
+                "zestimate": home_info.get("zestimate"),
+                "lot_size": home_info.get("lotAreaValue"),
+                "lot_size_unit": home_info.get("lotAreaUnit"),
+                "tax_assessment": home_info.get("taxAssessedValue"),
+                "zpid": home_info.get("zpid"),
+            })
+
+        return homes
 
     def get_property_pricing_history(self, zpid: int):
         """Fetch price history from Zillow GraphQL API"""
@@ -80,27 +123,13 @@ class PriceHistoryFetcher(SimpleCrawler):
             })
         return records
 
-    def _get_db_connection(self):
-        """Create database connection from environment variables"""
-        return psycopg2.connect(
-            dbname=os.environ.get("DB_NAME", "groceries"),
-            user=os.environ["DB_USER"],
-            password=os.environ["DB_PASSWORD"],
-            host=os.environ["DB_HOST"],
-            port=os.environ.get("DB_PORT", "5432")
-        )
-
     def save_price_history(self, records: List[Dict]):
         """Save price history records to database"""
         if not records:
             print(f"No price history records to save")
             return
 
-        conn = None
         try:
-            conn = self._get_db_connection()
-            cur = conn.cursor()
-
             insert_query = """
                 INSERT INTO price_history (
                     zpid, price, time, date,
@@ -123,50 +152,136 @@ class PriceHistoryFetcher(SimpleCrawler):
                     record.get('event')
                 ))
 
-            execute_batch(cur, insert_query, values)
-            conn.commit()
-
-            inserted_count = cur.rowcount
-            print(f"Processed {len(records)} price history records for zpid {records[0]['zpid']}, inserted {inserted_count} new records")
+            with DBAPI(dbname="homelander") as db:
+                inserted_count = db.execute_batch(insert_query, values)
+                print(f"Processed {len(records)} price history records for zpid {records[0]['zpid']}, inserted {inserted_count} new records")
 
         except Exception as e:
-            if conn:
-                conn.rollback()
             print(f"Error saving price history: {e}")
             raise
-        finally:
-            if conn:
-                cur.close()
-                conn.close()
 
-    def fetch_and_save(self, zpid: int):
-        """Main method to fetch and save price history for a property"""
-        print(f"Fetching price history for zpid: {zpid}")
-        records = self.get_property_pricing_history(zpid)
-        self.save_price_history(records)
+    def sync_sold(self, data: Dict):
+        results = self.fetch_recently_sold(data)
+        parsed_results = self.parse_recently_sold(results)
+        new_zpids = self._save_to_database(parsed_results)
 
-    @property
-    def s3_client(self):
-        """Lazy load S3 client"""
-        if self._s3_client is None and self.s3_bucket:
-            self._s3_client = boto3.client('s3')
-        return self._s3_client
+        for new_zpid in new_zpids:
+            records = self.get_property_pricing_history(new_zpid)
+            self.save_price_history(records)
+
+    def _save_to_database(self, homes: List[Dict]) -> List[int]:
+        """
+        Insert homes into database, skip duplicates.
+        Returns list of zpids for newly inserted homes.
+        """
+        if not homes:
+            print(f"No homes to save for {self.city}")
+            return []
+
+        try:
+            # Insert query with RETURNING to get zpids of new records
+            insert_query = """
+                INSERT INTO homes (
+                    url, sold_price, raw_sold_price,
+                    address_city, address_street, address_state, address_zipcode,
+                    date_sold, bedrooms, bathrooms, sqft,
+                    days_on_market, type, zestimate,
+                    lot_size, lot_size_unit, tax_assessment, zpid
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (address_city, address_street, address_state, date_sold) DO NOTHING
+                RETURNING zpid
+            """
+
+            # Prepare values for batch insert
+            values = []
+            for home in homes:
+                values.append((
+                    home.get('url'),
+                    home.get('sold_price'),
+                    home.get('raw_sold_price'),
+                    home.get('address', {}).get('city'),
+                    home.get('address', {}).get('street'),
+                    home.get('address', {}).get('state'),
+                    home.get('address', {}).get('zipcode'),
+                    home.get('date_sold'),
+                    home.get('bedrooms'),
+                    home.get('bathrooms'),
+                    home.get('sqft'),
+                    home.get('days_on_market'),
+                    home.get('type'),
+                    home.get('zestimate'),
+                    home.get('lot_size'),
+                    home.get('lot_size_unit'),
+                    home.get('tax_assessment'),
+                    home.get('zpid')
+                ))
+
+            # Execute batch insert and get zpids of new records
+            with DBAPI(dbname="homelander") as db:
+                results = db.execute_many_with_returning(insert_query, values)
+                new_zpids = [result[0] for result in results]
+
+                print(f"Processed {len(homes)} homes for {self.city}, inserted {len(new_zpids)} new records")
+                return new_zpids
+
+        except Exception as e:
+            print(f"Error saving to database for {self.city}: {e}")
+            raise
 
     def _load_session_data(self, city: str) -> dict:
         """Load session data from S3 or local file system"""
         filename = f"{city.lower()}.json"
+        with open(f"session_data/{filename}") as f:
+            return json.load(f)
 
-        if self.s3_bucket:
-            # Load from S3
-            s3_key = f"{self.s3_prefix}/{filename}"
-            response = self.s3_client.get_object(Bucket=self.s3_bucket, Key=s3_key)
-            return json.loads(response['Body'].read().decode('utf-8'))
-        else:
-            # Load from local file system
-            with open(f"session_data/{filename}") as f:
-                return json.load(f)
+    def save_cookies(self):
+        """Save current session cookies back to the session data file"""
+        if not self.city:
+            return
+
+        filepath = f"session_data/{self.city.lower()}.json"
+
+        with open(filepath) as f:
+            data = json.load(f)
+
+        data["cookies"] = {cookie.name: cookie.value for cookie in self.cookies.jar}
+
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
+
+        print(f"Saved cookies for {self.city}")
+
+    @classmethod
+    def for_city(cls, city):
+        """Factory method to create a crawler for a specific city"""
+        instance = cls()
+        instance.city = city
+        session_data = instance._load_session_data(city)
+        instance.load_cookies(session_data.get("cookies"))
+        request_data = session_data.get("data")
+        return instance, request_data
+
+    @classmethod
+    def run_all(cls):
+        """Run scraper for all cities"""
+        global _current_crawler
+        signal.signal(signal.SIGINT, _save_on_interrupt)
+
+        for city in cls.CITIES:
+            crawler, search_data = cls.for_city(city)
+            _current_crawler = crawler
+            try:
+                crawler.sync_sold(search_data)
+            finally:
+                crawler.save_cookies()
+
+        _current_crawler = None
 
 
-if __name__ == "__main__":
-    fetcher = PriceHistoryFetcher(s3_bucket="pirate-joes", s3_prefix="session_data")
-    fetcher.fetch_and_save(zpid=38243603)
+if __name__ == '__main__':
+    # Zillow.run_all()
+    zillow, _ = Zillow.for_city("Moorestown")
+    records = zillow.get_property_pricing_history(38127490)
+    zillow.save_price_history(records)

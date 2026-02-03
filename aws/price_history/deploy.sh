@@ -5,16 +5,16 @@
 
 set -e
 
-if [ "$#" -lt 3 ]; then
-    echo "Usage: $0 <aws-account-id> <region> <s3-bucket> [function-name]"
-    echo "Example: $0 123456789012 us-east-1 my-zillow-bucket price-history-fetcher"
-    exit 1
-fi
+#if [ "$#" -lt 3 ]; then
+#    echo "Usage: $0 <aws-account-id> <region> <s3-bucket> [function-name]"
+#    echo "Example: $0 123456789012 us-east-1 my-zillow-bucket price-history-fetcher"
+#    exit 1
+#fi
 
-ACCOUNT_ID=$1
-REGION=$2
-S3_BUCKET=$3
-FUNCTION_NAME=${4:-price-history-fetcher}
+ACCOUNT_ID="352803440406"
+REGION="us-east-2"
+S3_BUCKET="pirate-joes"
+FUNCTION_NAME="price-history"
 IMAGE_NAME="price-history-fetcher"
 ECR_REPO="$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$IMAGE_NAME"
 

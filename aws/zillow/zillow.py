@@ -5,7 +5,7 @@ import psycopg2
 import time
 from typing import Dict, Optional, List
 
-from simple_crawler import SimpleCrawler
+from crawler.simple_crawler import SimpleCrawler
 
 
 class Zillow(SimpleCrawler):
