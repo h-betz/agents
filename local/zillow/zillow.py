@@ -1,4 +1,5 @@
 import json
+import random
 import signal
 import sys
 import time
@@ -39,9 +40,16 @@ class Zillow(SimpleCrawler):
         if response.status_code != 200:
             raise Exception(f"Request to {url} failed with status code {response.status_code}")
         results = response.json()
+        properties = [results]
         if results.get("cat1").get("searchList").get("totalPages") > 1:
-            raise Exception(f"Too many results for {self.city}")
-        return response.json()
+            for page in range(2, results.get("cat1").get("searchList").get("totalPages") + 1):
+                time.sleep(random.randint(1, 5))
+                data["searchQueryState"]["pagination"] = {"currentPage": page}
+                response = self.put(url, json=data)
+                if response.status_code != 200:
+                    raise Exception(f"Request to {url} failed with status code {response.status_code} on page {page}")
+                properties.append(response.json())
+        return properties
 
     def parse_recently_sold(self, data: Dict):
         search_result = data.get("cat1")
@@ -101,11 +109,10 @@ class Zillow(SimpleCrawler):
         }
 
         print(f"Making request for ZPID [{zpid}]")
-        time.sleep(2)
+        time.sleep(random.randint(1, 5))
         response = self.post('https://www.zillow.com/graphql/', params=params, json=data)
         print(f"Response [{response.status_code}]")
         js_result = response.json()
-        print(js_result)
         data = js_result.get('data', {})
         property_details = data.get("property", {})
         price_history = property_details.get("priceHistory", [])
@@ -162,8 +169,10 @@ class Zillow(SimpleCrawler):
 
     def sync_sold(self, data: Dict):
         results = self.fetch_recently_sold(data)
-        parsed_results = self.parse_recently_sold(results)
-        new_zpids = self._save_to_database(parsed_results)
+        new_zpids = []
+        for result_block in results:
+            parsed_results = self.parse_recently_sold(result_block)
+            new_zpids.extend(self._save_to_database(parsed_results))
 
         for new_zpid in new_zpids:
             records = self.get_property_pricing_history(new_zpid)
@@ -282,6 +291,7 @@ class Zillow(SimpleCrawler):
 
 if __name__ == '__main__':
     # Zillow.run_all()
-    zillow, _ = Zillow.for_city("Moorestown")
-    records = zillow.get_property_pricing_history(38127490)
-    zillow.save_price_history(records)
+    zillow, search_data = Zillow.for_city("Moorestown")
+    zillow.sync_sold(search_data)
+    # records = zillow.get_property_pricing_history(38127490)
+    # zillow.save_price_history(records)
