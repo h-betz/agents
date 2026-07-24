@@ -1,4 +1,6 @@
+import csv
 import json
+import os
 import random
 import signal
 import sys
@@ -6,7 +8,6 @@ import time
 from typing import Dict, List
 
 from crawler.simple_crawler import SimpleCrawler
-from db_api import DBAPI
 
 # Track current crawler for signal handler
 _current_crawler = None
@@ -18,8 +19,41 @@ def _save_on_interrupt(signum, frame):
     sys.exit(1)
 
 
+def _csv_str(value) -> str:
+    return "" if value is None else str(value)
+
+
+def _read_csv_rows(path: str) -> List[Dict]:
+    if not os.path.exists(path):
+        return []
+    with open(path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def _write_csv_rows(path: str, fieldnames: List[str], rows: List[Dict]):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 class Zillow(SimpleCrawler):
     CITIES = ["Collingswood", "Haddonfield", "Haddon_Township", "Moorestown"]
+
+    HOMES_CSV_PATH = "data/homes.csv"
+    HOMES_CSV_FIELDS = [
+        "url", "sold_price", "raw_sold_price",
+        "address_city", "address_street", "address_state", "address_zipcode",
+        "date_sold", "bedrooms", "bathrooms", "sqft",
+        "days_on_market", "type", "zestimate",
+        "lot_size", "lot_size_unit", "tax_assessment", "zpid",
+    ]
+    HOMES_DEDUP_FIELDS = ("address_city", "address_street", "address_state", "date_sold")
+
+    PRICE_HISTORY_CSV_PATH = "data/price_history.csv"
+    PRICE_HISTORY_CSV_FIELDS = ["zpid", "price", "time", "date", "price_per_sq_ft", "price_change_rate", "event"]
+    PRICE_HISTORY_DEDUP_FIELDS = ("zpid", "time", "event")
 
     def __init__(self):
         super(Zillow, self).__init__()
@@ -131,113 +165,84 @@ class Zillow(SimpleCrawler):
         return records
 
     def save_price_history(self, records: List[Dict]):
-        """Save price history records to database"""
+        """Save price history records to CSV, skipping duplicates"""
         if not records:
             print(f"No price history records to save")
             return
 
-        try:
-            insert_query = """
-                INSERT INTO price_history (
-                    zpid, price, time, date,
-                    price_per_sq_ft, price_change_rate, event
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s
-                )
-                ON CONFLICT (zpid, time, event) DO NOTHING
-            """
+        rows = _read_csv_rows(self.PRICE_HISTORY_CSV_PATH)
+        existing_keys = {tuple(row.get(f, "") for f in self.PRICE_HISTORY_DEDUP_FIELDS) for row in rows}
 
-            values = []
-            for record in records:
-                values.append((
-                    record.get('zpid'),
-                    record.get('price'),
-                    record.get('time'),
-                    record.get('date'),
-                    record.get('price_per_sq_ft'),
-                    record.get('price_change_rate'),
-                    record.get('event')
-                ))
+        inserted_count = 0
+        for record in records:
+            row = {field: _csv_str(record.get(field)) for field in self.PRICE_HISTORY_CSV_FIELDS}
+            key = tuple(row[f] for f in self.PRICE_HISTORY_DEDUP_FIELDS)
+            if key in existing_keys:
+                continue
+            rows.append(row)
+            existing_keys.add(key)
+            inserted_count += 1
 
-            with DBAPI(dbname="homelander") as db:
-                inserted_count = db.execute_batch(insert_query, values)
-                print(f"Processed {len(records)} price history records for zpid {records[0]['zpid']}, inserted {inserted_count} new records")
-
-        except Exception as e:
-            print(f"Error saving price history: {e}")
-            raise
+        if inserted_count:
+            _write_csv_rows(self.PRICE_HISTORY_CSV_PATH, self.PRICE_HISTORY_CSV_FIELDS, rows)
+        print(f"Processed {len(records)} price history records for zpid {records[0]['zpid']}, inserted {inserted_count} new records")
 
     def sync_sold(self, data: Dict):
         results = self.fetch_recently_sold(data)
         new_zpids = []
         for result_block in results:
             parsed_results = self.parse_recently_sold(result_block)
-            new_zpids.extend(self._save_to_database(parsed_results))
+            new_zpids.extend(self._save_to_csv(parsed_results))
 
         for new_zpid in new_zpids:
             records = self.get_property_pricing_history(new_zpid)
             self.save_price_history(records)
 
-    def _save_to_database(self, homes: List[Dict]) -> List[int]:
+    def _save_to_csv(self, homes: List[Dict]) -> List[int]:
         """
-        Insert homes into database, skip duplicates.
-        Returns list of zpids for newly inserted homes.
+        Append homes to the CSV file, skip duplicates.
+        Returns list of zpids for newly added homes.
         """
         if not homes:
             print(f"No homes to save for {self.city}")
             return []
 
-        try:
-            # Insert query with RETURNING to get zpids of new records
-            insert_query = """
-                INSERT INTO homes (
-                    url, sold_price, raw_sold_price,
-                    address_city, address_street, address_state, address_zipcode,
-                    date_sold, bedrooms, bathrooms, sqft,
-                    days_on_market, type, zestimate,
-                    lot_size, lot_size_unit, tax_assessment, zpid
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                ON CONFLICT (address_city, address_street, address_state, date_sold) DO NOTHING
-                RETURNING zpid
-            """
+        rows = _read_csv_rows(self.HOMES_CSV_PATH)
+        existing_keys = {tuple(row.get(f, "") for f in self.HOMES_DEDUP_FIELDS) for row in rows}
 
-            # Prepare values for batch insert
-            values = []
-            for home in homes:
-                values.append((
-                    home.get('url'),
-                    home.get('sold_price'),
-                    home.get('raw_sold_price'),
-                    home.get('address', {}).get('city'),
-                    home.get('address', {}).get('street'),
-                    home.get('address', {}).get('state'),
-                    home.get('address', {}).get('zipcode'),
-                    home.get('date_sold'),
-                    home.get('bedrooms'),
-                    home.get('bathrooms'),
-                    home.get('sqft'),
-                    home.get('days_on_market'),
-                    home.get('type'),
-                    home.get('zestimate'),
-                    home.get('lot_size'),
-                    home.get('lot_size_unit'),
-                    home.get('tax_assessment'),
-                    home.get('zpid')
-                ))
+        new_zpids = []
+        for home in homes:
+            row = {
+                "url": _csv_str(home.get('url')),
+                "sold_price": _csv_str(home.get('sold_price')),
+                "raw_sold_price": _csv_str(home.get('raw_sold_price')),
+                "address_city": _csv_str(home.get('address', {}).get('city')),
+                "address_street": _csv_str(home.get('address', {}).get('street')),
+                "address_state": _csv_str(home.get('address', {}).get('state')),
+                "address_zipcode": _csv_str(home.get('address', {}).get('zipcode')),
+                "date_sold": _csv_str(home.get('date_sold')),
+                "bedrooms": _csv_str(home.get('bedrooms')),
+                "bathrooms": _csv_str(home.get('bathrooms')),
+                "sqft": _csv_str(home.get('sqft')),
+                "days_on_market": _csv_str(home.get('days_on_market')),
+                "type": _csv_str(home.get('type')),
+                "zestimate": _csv_str(home.get('zestimate')),
+                "lot_size": _csv_str(home.get('lot_size')),
+                "lot_size_unit": _csv_str(home.get('lot_size_unit')),
+                "tax_assessment": _csv_str(home.get('tax_assessment')),
+                "zpid": _csv_str(home.get('zpid')),
+            }
+            key = tuple(row[f] for f in self.HOMES_DEDUP_FIELDS)
+            if key in existing_keys:
+                continue
+            rows.append(row)
+            existing_keys.add(key)
+            new_zpids.append(home.get('zpid'))
 
-            # Execute batch insert and get zpids of new records
-            with DBAPI(dbname="homelander") as db:
-                results = db.execute_many_with_returning(insert_query, values)
-                new_zpids = [result[0] for result in results]
-
-                print(f"Processed {len(homes)} homes for {self.city}, inserted {len(new_zpids)} new records")
-                return new_zpids
-
-        except Exception as e:
-            print(f"Error saving to database for {self.city}: {e}")
-            raise
+        if new_zpids:
+            _write_csv_rows(self.HOMES_CSV_PATH, self.HOMES_CSV_FIELDS, rows)
+        print(f"Processed {len(homes)} homes for {self.city}, inserted {len(new_zpids)} new records")
+        return new_zpids
 
     def _load_session_data(self, city: str) -> dict:
         """Load session data from S3 or local file system"""

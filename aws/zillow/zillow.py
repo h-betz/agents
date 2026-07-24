@@ -1,15 +1,29 @@
 import boto3
+import csv
+import io
 import json
 import os
-import psycopg2
 import time
 from typing import Dict, Optional, List
 
 from crawler.simple_crawler import SimpleCrawler
 
 
+def _csv_str(value) -> str:
+    return "" if value is None else str(value)
+
+
 class Zillow(SimpleCrawler):
     CITIES = ["Collingswood", "Haddonfield", "Haddon_Township", "Moorestown"]
+
+    HOMES_CSV_FIELDS = [
+        "url", "sold_price", "raw_sold_price",
+        "address_city", "address_street", "address_state", "address_zipcode",
+        "date_sold", "bedrooms", "bathrooms", "sqft",
+        "days_on_market", "type", "zestimate",
+        "lot_size", "lot_size_unit", "tax_assessment", "zpid",
+    ]
+    HOMES_DEDUP_FIELDS = ("address_city", "address_street", "address_state", "date_sold")
 
     def __init__(self, s3_bucket: Optional[str] = None, s3_prefix: Optional[str] = None):
         super(Zillow, self).__init__()
@@ -72,21 +86,11 @@ class Zillow(SimpleCrawler):
     def sync_sold(self, data: Dict):
         results = self.fetch_recently_sold(data)
         parsed_results = self.parse_recently_sold(results)
-        new_zpids = self._save_to_database(parsed_results)
+        new_zpids = self._save_to_csv(parsed_results)
 
         # Send new zpids to SQS for price history fetching
         if new_zpids:
             self._send_to_sqs(new_zpids)
-
-    def _get_db_connection(self):
-        """Create database connection from environment variables"""
-        return psycopg2.connect(
-            dbname=os.environ.get("DB_NAME", "groceries"),
-            user=os.environ["DB_USER"],
-            password=os.environ["DB_PASSWORD"],
-            host=os.environ["DB_HOST"],
-            port=os.environ.get("DB_PORT", "5432")
-        )
 
     def _send_to_sqs(self, zpids: List[int]):
         """Send zpids to SQS queue for price history fetching"""
@@ -113,83 +117,88 @@ class Zillow(SimpleCrawler):
             print(f"Error sending messages to SQS: {e}")
             # Don't raise - SQS failure shouldn't break the scraper
 
-    def _save_to_database(self, homes: List[Dict]) -> List[int]:
+    @property
+    def homes_csv_key(self) -> str:
+        """Path (S3 key or local path) of the homes CSV file"""
+        if self.s3_bucket:
+            return f"{self.s3_prefix}/homes.csv"
+        return "data/homes.csv"
+
+    def _read_csv_rows(self, key_or_path: str) -> List[Dict]:
+        """Read existing CSV rows from S3 or local disk"""
+        if self.s3_bucket:
+            try:
+                response = self.s3_client.get_object(Bucket=self.s3_bucket, Key=key_or_path)
+            except self.s3_client.exceptions.NoSuchKey:
+                return []
+            content = response['Body'].read().decode('utf-8')
+            return list(csv.DictReader(io.StringIO(content)))
+        else:
+            if not os.path.exists(key_or_path):
+                return []
+            with open(key_or_path, newline="") as f:
+                return list(csv.DictReader(f))
+
+    def _write_csv_rows(self, key_or_path: str, fieldnames: List[str], rows: List[Dict]):
+        """Write CSV rows to S3 or local disk"""
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+        if self.s3_bucket:
+            self.s3_client.put_object(Bucket=self.s3_bucket, Key=key_or_path, Body=buffer.getvalue().encode('utf-8'))
+        else:
+            os.makedirs(os.path.dirname(key_or_path) or ".", exist_ok=True)
+            with open(key_or_path, "w", newline="") as f:
+                f.write(buffer.getvalue())
+
+    def _save_to_csv(self, homes: List[Dict]) -> List[int]:
         """
-        Insert homes into database, skip duplicates.
-        Returns list of zpids for newly inserted homes.
+        Append homes to the CSV file, skip duplicates.
+        Returns list of zpids for newly added homes.
         """
         if not homes:
             print(f"No homes to save for {self.city}")
             return []
 
-        conn = None
+        csv_key = self.homes_csv_key
+        rows = self._read_csv_rows(csv_key)
+        existing_keys = {tuple(row.get(f, "") for f in self.HOMES_DEDUP_FIELDS) for row in rows}
+
         new_zpids = []
+        for home in homes:
+            row = {
+                "url": _csv_str(home.get('url')),
+                "sold_price": _csv_str(home.get('sold_price')),
+                "raw_sold_price": _csv_str(home.get('raw_sold_price')),
+                "address_city": _csv_str(home.get('address', {}).get('city')),
+                "address_street": _csv_str(home.get('address', {}).get('street')),
+                "address_state": _csv_str(home.get('address', {}).get('state')),
+                "address_zipcode": _csv_str(home.get('address', {}).get('zipcode')),
+                "date_sold": _csv_str(home.get('date_sold')),
+                "bedrooms": _csv_str(home.get('bedrooms')),
+                "bathrooms": _csv_str(home.get('bathrooms')),
+                "sqft": _csv_str(home.get('sqft')),
+                "days_on_market": _csv_str(home.get('days_on_market')),
+                "type": _csv_str(home.get('type')),
+                "zestimate": _csv_str(home.get('zestimate')),
+                "lot_size": _csv_str(home.get('lot_size')),
+                "lot_size_unit": _csv_str(home.get('lot_size_unit')),
+                "tax_assessment": _csv_str(home.get('tax_assessment')),
+                "zpid": _csv_str(home.get('zpid')),
+            }
+            key = tuple(row[f] for f in self.HOMES_DEDUP_FIELDS)
+            if key in existing_keys:
+                continue
+            rows.append(row)
+            existing_keys.add(key)
+            new_zpids.append(home.get('zpid'))
 
-        try:
-            conn = self._get_db_connection()
-            cur = conn.cursor()
-
-            # Insert query with RETURNING to get zpids of new records
-            insert_query = """
-                INSERT INTO homes (
-                    url, sold_price, raw_sold_price,
-                    address_city, address_street, address_state, address_zipcode,
-                    date_sold, bedrooms, bathrooms, sqft,
-                    days_on_market, type, zestimate,
-                    lot_size, lot_size_unit, tax_assessment, zpid
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                ON CONFLICT (address_city, address_street, address_state, date_sold) DO NOTHING
-                RETURNING zpid
-            """
-
-            # Insert one by one to get zpids of new records
-            for home in homes:
-                try:
-                    cur.execute(insert_query, (
-                        home.get('url'),
-                        home.get('sold_price'),
-                        home.get('raw_sold_price'),
-                        home.get('address', {}).get('city'),
-                        home.get('address', {}).get('street'),
-                        home.get('address', {}).get('state'),
-                        home.get('address', {}).get('zipcode'),
-                        home.get('date_sold'),
-                        home.get('bedrooms'),
-                        home.get('bathrooms'),
-                        home.get('sqft'),
-                        home.get('days_on_market'),
-                        home.get('type'),
-                        home.get('zestimate'),
-                        home.get('lot_size'),
-                        home.get('lot_size_unit'),
-                        home.get('tax_assessment'),
-                        home.get('zpid')
-                    ))
-
-                    # If insert succeeded (not a duplicate), get the zpid
-                    result = cur.fetchone()
-                    if result:
-                        new_zpids.append(result[0])
-
-                except Exception as e:
-                    print(f"Error inserting home: {e}")
-                    # Continue with other homes
-
-            conn.commit()
-            print(f"Processed {len(homes)} homes for {self.city}, inserted {len(new_zpids)} new records")
-            return new_zpids
-
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            print(f"Error saving to database for {self.city}: {e}")
-            raise
-        finally:
-            if conn:
-                cur.close()
-                conn.close()
+        if new_zpids:
+            self._write_csv_rows(csv_key, self.HOMES_CSV_FIELDS, rows)
+        print(f"Processed {len(homes)} homes for {self.city}, inserted {len(new_zpids)} new records")
+        return new_zpids
 
     @property
     def s3_client(self):

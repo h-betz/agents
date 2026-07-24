@@ -1,15 +1,22 @@
 import boto3
+import csv
+import io
 import os
 import json
-import psycopg2
 import time
-from psycopg2.extras import execute_batch
 from typing import List, Dict, Optional
 from simple_crawler import SimpleCrawler
 
 
+def _csv_str(value) -> str:
+    return "" if value is None else str(value)
+
+
 class PriceHistoryFetcher(SimpleCrawler):
     """Fetches and stores price history for properties"""
+
+    PRICE_HISTORY_CSV_FIELDS = ["zpid", "price", "time", "date", "price_per_sq_ft", "price_change_rate", "event"]
+    PRICE_HISTORY_DEDUP_FIELDS = ("zpid", "time", "event")
 
     def __init__(self, s3_bucket: Optional[str] = None, s3_prefix: Optional[str] = None, session_city: str = "Collingswood"):
         super().__init__()
@@ -80,64 +87,65 @@ class PriceHistoryFetcher(SimpleCrawler):
             })
         return records
 
-    def _get_db_connection(self):
-        """Create database connection from environment variables"""
-        return psycopg2.connect(
-            dbname=os.environ.get("DB_NAME", "groceries"),
-            user=os.environ["DB_USER"],
-            password=os.environ["DB_PASSWORD"],
-            host=os.environ["DB_HOST"],
-            port=os.environ.get("DB_PORT", "5432")
-        )
+    @property
+    def price_history_csv_key(self) -> str:
+        """Path (S3 key or local path) of the price history CSV file"""
+        if self.s3_bucket:
+            return f"{self.s3_prefix}/price_history.csv"
+        return "data/price_history.csv"
+
+    def _read_csv_rows(self, key_or_path: str) -> List[Dict]:
+        """Read existing CSV rows from S3 or local disk"""
+        if self.s3_bucket:
+            try:
+                response = self.s3_client.get_object(Bucket=self.s3_bucket, Key=key_or_path)
+            except self.s3_client.exceptions.NoSuchKey:
+                return []
+            content = response['Body'].read().decode('utf-8')
+            return list(csv.DictReader(io.StringIO(content)))
+        else:
+            if not os.path.exists(key_or_path):
+                return []
+            with open(key_or_path, newline="") as f:
+                return list(csv.DictReader(f))
+
+    def _write_csv_rows(self, key_or_path: str, fieldnames: List[str], rows: List[Dict]):
+        """Write CSV rows to S3 or local disk"""
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+        if self.s3_bucket:
+            self.s3_client.put_object(Bucket=self.s3_bucket, Key=key_or_path, Body=buffer.getvalue().encode('utf-8'))
+        else:
+            os.makedirs(os.path.dirname(key_or_path) or ".", exist_ok=True)
+            with open(key_or_path, "w", newline="") as f:
+                f.write(buffer.getvalue())
 
     def save_price_history(self, records: List[Dict]):
-        """Save price history records to database"""
+        """Save price history records to CSV, skipping duplicates"""
         if not records:
             print(f"No price history records to save")
             return
 
-        conn = None
-        try:
-            conn = self._get_db_connection()
-            cur = conn.cursor()
+        csv_key = self.price_history_csv_key
+        rows = self._read_csv_rows(csv_key)
+        existing_keys = {tuple(row.get(f, "") for f in self.PRICE_HISTORY_DEDUP_FIELDS) for row in rows}
 
-            insert_query = """
-                INSERT INTO price_history (
-                    zpid, price, time, date,
-                    price_per_sq_ft, price_change_rate, event
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s
-                )
-                ON CONFLICT (zpid, time, event) DO NOTHING
-            """
+        inserted_count = 0
+        for record in records:
+            row = {field: _csv_str(record.get(field)) for field in self.PRICE_HISTORY_CSV_FIELDS}
+            key = tuple(row[f] for f in self.PRICE_HISTORY_DEDUP_FIELDS)
+            if key in existing_keys:
+                continue
+            rows.append(row)
+            existing_keys.add(key)
+            inserted_count += 1
 
-            values = []
-            for record in records:
-                values.append((
-                    record.get('zpid'),
-                    record.get('price'),
-                    record.get('time'),
-                    record.get('date'),
-                    record.get('price_per_sq_ft'),
-                    record.get('price_change_rate'),
-                    record.get('event')
-                ))
-
-            execute_batch(cur, insert_query, values)
-            conn.commit()
-
-            inserted_count = cur.rowcount
-            print(f"Processed {len(records)} price history records for zpid {records[0]['zpid']}, inserted {inserted_count} new records")
-
-        except Exception as e:
-            if conn:
-                conn.rollback()
-            print(f"Error saving price history: {e}")
-            raise
-        finally:
-            if conn:
-                cur.close()
-                conn.close()
+        if inserted_count:
+            self._write_csv_rows(csv_key, self.PRICE_HISTORY_CSV_FIELDS, rows)
+        print(f"Processed {len(records)} price history records for zpid {records[0]['zpid']}, inserted {inserted_count} new records")
 
     def fetch_and_save(self, zpid: int):
         """Main method to fetch and save price history for a property"""

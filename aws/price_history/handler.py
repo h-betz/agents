@@ -10,12 +10,7 @@ def lambda_handler(event, context):
     Triggered by SQS messages containing zpid
 
     Environment Variables:
-        DB_HOST: Database host
-        DB_PORT: Database port (default: 5432)
-        DB_NAME: Database name
-        DB_USER: Database user
-        DB_PASSWORD: Database password
-        ZILLOW_S3_BUCKET: S3 bucket containing session data (optional)
+        ZILLOW_S3_BUCKET: S3 bucket containing session data and price_history.csv (optional)
         ZILLOW_S3_PREFIX: S3 prefix for session data files (optional)
 
     Args:

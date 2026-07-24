@@ -19,10 +19,12 @@ class PSEG(Crawler):
             self.headers.update(kwargs.get("headers"))
 
     def login(self, url: str, username: str, password: str):
+        p = sync_playwright()
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=False)
             context = browser.new_context()
             page = context.new_page()
+            url = "https://secure.verizon.com/signin"
 
             page.goto(url)
 
@@ -160,21 +162,7 @@ class PSEG(Crawler):
 
 
 if __name__ == "__main__":
-    pseg = PSEG(cookies={
-        'remember_selected_domain': 'NJPublic',
-        'shell#lang': 'en',
-        'currentselectedlanguage': 'en',
-        'OAM_userName': 'aHVudGVyX2JldHo=',
-        'ProfileHeader_BPNumber': '1006081175',
-        'ProfileHeader_AccNumber': '7691000200',
-        'ProfileHeader_IsMulti': 'True',
-        'ProfileHeader_AmountDue': '0.00',
-        'OAM_DisplayName': 'SFVOVEVSIEJFVFog',
-        'OAM_userFirstName': 'SFVOVEVSIEJFVFog'
-    },
-    headers={
-        "X-Device-Fingerprint": "dhtTJBt0Iej5RQdV5Fjfg2sTZRD9csGN|a0f0a78c4a7fb8add3e3917464567094fb52b8ad629944559b53af1f7cf9a83f|d0af7df3216d87ca8a731cd4226186f2"
-    })
+    pseg = PSEG()
     pseg.login(
         "https://nj.pseg.com/",
         username=os.getenv("PSEG_USER_NAME"),

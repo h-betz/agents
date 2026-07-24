@@ -77,3 +77,4 @@ uritemplate==4.2.0
 urllib3==2.5.0
 uvicorn==0.38.0
 psycopg2-binary==2.9.10
+pyarrow==25.0.0
